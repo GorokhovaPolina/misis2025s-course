@@ -3,6 +3,7 @@
 #include <opencv2/highgui.hpp>
 #include <stdexcept>
 #include <iostream>
+#include <vector>
 
 ImageProcessor::ImageProcessor(const std::string &imagePath, const Config &config)
     : config_(config)
@@ -16,11 +17,8 @@ ImageProcessor::ImageProcessor(const std::string &imagePath, const Config &confi
 
 void ImageProcessor::preprocess()
 {
-    // Перевод в HSV
     cv::cvtColor(originalImage, hsvImage, cv::COLOR_BGR2HSV);
-    // Минимальное размытие для удаления мелкого шума
     cv::GaussianBlur(hsvImage, hsvImage, cv::Size(3, 3), 0);
-    // Отладка
     cv::Mat debugBGR;
     cv::cvtColor(hsvImage, debugBGR, cv::COLOR_HSV2BGR);
     cv::imwrite("debug_preprocessed.png", debugBGR);
@@ -28,20 +26,43 @@ void ImageProcessor::preprocess()
 
 void ImageProcessor::removeBackground()
 {
-    // Сегментация фона в HSV (белый фон)
-    cv::inRange(hsvImage, cv::Scalar(0, 0, 200), cv::Scalar(255, 30, 255), backgroundMask);
+    cv::Mat rgbData;
+    originalImage.reshape(1, originalImage.rows * originalImage.cols).convertTo(rgbData, CV_32F);
+    cv::kmeans(rgbData, 3, labels, cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 20, 1.0),
+               5, cv::KMEANS_PP_CENTERS);
 
-    // Инверсия: объекты = 255, фон = 0
-    cv::bitwise_not(backgroundMask, backgroundMask);
+    labels = labels.reshape(1, originalImage.rows);
 
-    // Удаление мелкого шума
+    std::vector<int> clusterCounts(3, 0);
+    for (int i = 0; i < labels.rows; i++)
+    {
+        for (int j = 0; j < labels.cols; j++)
+        {
+            int label = labels.at<int>(i, j);
+            clusterCounts[label]++;
+        }
+    }
+
+    int backgroundLabel = std::distance(clusterCounts.begin(),
+                                        std::max_element(clusterCounts.begin(), clusterCounts.end()));
+
+    backgroundMask = cv::Mat::zeros(originalImage.size(), CV_8UC1);
+    for (int i = 0; i < originalImage.rows; i++)
+    {
+        for (int j = 0; j < originalImage.cols; j++)
+        {
+            if (labels.at<int>(i, j) != backgroundLabel)
+            {
+                backgroundMask.at<uchar>(i, j) = 255;
+            }
+        }
+    }
+
     cv::morphologyEx(backgroundMask, backgroundMask, cv::MORPH_OPEN,
                      cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3)));
 
-    // Отладка
     cv::imwrite("debug_background_mask.png", backgroundMask);
 
-    // Проверка
     if (cv::countNonZero(backgroundMask) == 0)
     {
         std::cerr << "Предупреждение: backgroundMask пуста!" << std::endl;
@@ -50,56 +71,104 @@ void ImageProcessor::removeBackground()
 
 void ImageProcessor::createMasks()
 {
-    // 1. Выделение текста (черного) через цветовую сегментацию
-    cv::Mat textMask;
-    // Черный цвет в HSV: низкая яркость
-    cv::inRange(hsvImage, cv::Scalar(0, 0, 0), cv::Scalar(255, 255, 50), textMask);
+    // Увеличиваем количество кластеров до 4
+    int numClusters = 4;
+    cv::Mat rgbData;
+    originalImage.reshape(1, originalImage.rows * originalImage.cols).convertTo(rgbData, CV_32F);
+    cv::kmeans(rgbData, numClusters, labels, cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 20, 1.0),
+               5, cv::KMEANS_PP_CENTERS);
+    labels = labels.reshape(1, originalImage.rows);
 
-    // Улучшение текста через морфологию
-    cv::morphologyEx(textMask, textMask, cv::MORPH_CLOSE,
-                     cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3)));
-
-    // Применяем маску фона
-    cv::bitwise_and(textMask, backgroundMask, maskWritten);
-
-    // Отладка
-    cv::imwrite("debug_text_mask_initial.png", maskWritten);
-
-    if (cv::countNonZero(maskWritten) == 0)
+    // Создаем маски для каждого кластера
+    std::vector<cv::Mat> clusterMasks(numClusters);
+    for (int k = 0; k < numClusters; k++)
     {
-        std::cerr << "Предупреждение: maskWritten пуста после цветовой сегментации!" << std::endl;
+        clusterMasks[k] = cv::Mat::zeros(originalImage.size(), CV_8UC1);
+        for (int i = 0; i < originalImage.rows; i++)
+        {
+            for (int j = 0; j < originalImage.cols; j++)
+            {
+                if (labels.at<int>(i, j) == k)
+                {
+                    clusterMasks[k].at<uchar>(i, j) = 255;
+                }
+            }
+        }
+        cv::imwrite("debug_cluster_" + std::to_string(k) + ".png", clusterMasks[k]);
     }
 
-    // 2. Выделение зачеркивания (красного) через цветовую сегментацию
-    cv::Mat redMask;
-    // Красный цвет в HSV: оттенок около 0 или 180
-    cv::Mat redMask1, redMask2;
-    cv::inRange(hsvImage, cv::Scalar(0, 50, 50), cv::Scalar(10, 255, 255), redMask1);    // Нижний красный
-    cv::inRange(hsvImage, cv::Scalar(170, 50, 50), cv::Scalar(180, 255, 255), redMask2); // Верхний красный
-    redMask = redMask1 | redMask2;
-
-    // Улучшение зачеркивания
-    cv::morphologyEx(redMask, redMask, cv::MORPH_DILATE,
-                     cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
-
-    // Применяем маску фона
-    cv::bitwise_and(redMask, backgroundMask, maskOverwritten);
-
-    // Отладка
-    cv::imwrite("debug_overwritten_mask.png", maskOverwritten);
-
-    if (cv::countNonZero(maskOverwritten) == 0)
+    // Определяем кластер фона как самый большой
+    int backgroundLabel = -1;
+    int maxCount = 0;
+    for (int k = 0; k < numClusters; k++)
     {
-        std::cerr << "Предупреждение: maskOverwritten пуста после цветовой сегментации!" << std::endl;
+        int count = cv::countNonZero(clusterMasks[k]);
+        if (count > maxCount)
+        {
+            maxCount = count;
+            backgroundLabel = k;
+        }
     }
 
-    // 3. Очистка маски текста от зачеркивания
+    // Оставшиеся кластеры — объекты (текст и зачеркивания)
+    std::vector<int> objectClusters;
+    for (int k = 0; k < numClusters; k++)
+    {
+        if (k != backgroundLabel)
+        {
+            objectClusters.push_back(k);
+        }
+    }
+
+    // Инициализируем маски
+    maskWritten = cv::Mat::zeros(originalImage.size(), CV_8UC1);     // Маска текста
+    maskOverwritten = cv::Mat::zeros(originalImage.size(), CV_8UC1); // Маска зачеркиваний
+
+    // Анализируем каждый кластер объектов
+    for (int idx : objectClusters)
+    {
+        cv::Mat cluster = clusterMasks[idx];
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(cluster, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+        for (const auto &contour : contours)
+        {
+            cv::Rect bbox = cv::boundingRect(contour);
+            double aspectRatio = static_cast<double>(bbox.width) / bbox.height;
+            double area = cv::contourArea(contour);
+
+            // Проверяем форму: зачеркивания обычно вытянутые
+            bool isOverwritten = (aspectRatio > 3.0 || 1.0 / aspectRatio > 3.0) && area > 50;
+
+            // Анализируем текстуру с помощью фильтра Габора
+            cv::Mat roi = originalImage(bbox);
+            cv::Mat grayRoi;
+            cv::cvtColor(roi, grayRoi, cv::COLOR_BGR2GRAY);
+            cv::Mat gaborResponse;
+            cv::Mat gaborKernel = cv::getGaborKernel(cv::Size(5, 5), 1.0, 0.0, 1.0, 1.0);
+            cv::filter2D(grayRoi, gaborResponse, CV_32F, gaborKernel);
+            double meanResponse = cv::mean(gaborResponse)[0];
+
+            // Если отклик Габора низкий и форма вытянутая — это зачеркивание
+            if (isOverwritten && meanResponse < 50)
+            {
+                cv::drawContours(maskOverwritten, std::vector<std::vector<cv::Point>>{contour}, -1, cv::Scalar(255), -1);
+            }
+            else
+            {
+                cv::drawContours(maskWritten, std::vector<std::vector<cv::Point>>{contour}, -1, cv::Scalar(255), -1);
+            }
+        }
+    }
+
+    // Очищаем маску текста от зачеркиваний
     cv::Mat notOverwritten;
     cv::bitwise_not(maskOverwritten, notOverwritten);
     cv::bitwise_and(maskWritten, notOverwritten, maskWritten);
 
-    // Отладка
-    cv::imwrite("debug_text_mask_final.png", maskWritten);
+    // Сохраняем отладочные изображения
+    cv::imwrite("debug_overwritten_mask.png", maskOverwritten);
+    cv::imwrite("debug_text_mask.png", maskWritten);
 }
 
 void ImageProcessor::process()
@@ -107,18 +176,16 @@ void ImageProcessor::process()
     preprocess();
     removeBackground();
     createMasks();
-    // Применяем маску фона (фон становится черным)
     cv::Mat notBackgroundMask;
     cv::bitwise_not(backgroundMask, notBackgroundMask);
     originalImage.setTo(cv::Scalar(0, 0, 0), notBackgroundMask);
-    // Отладка
     cv::imwrite("debug_final_image.png", originalImage);
 }
 
 void ImageProcessor::saveMasks(const std::string &mask1Path, const std::string &mask2Path)
 {
-    cv::imwrite(mask1Path, maskOverwritten); // Зачеркивание
-    cv::imwrite(mask2Path, maskWritten);     // Текст
+    cv::imwrite(mask1Path, maskOverwritten);
+    cv::imwrite(mask2Path, maskWritten);
 }
 
 double ImageProcessor::calculateIoU(const cv::Mat &mask1, const cv::Mat &mask2)
@@ -133,5 +200,5 @@ double ImageProcessor::calculateIoU(const cv::Mat &mask1, const cv::Mat &mask2)
 
 int ImageProcessor::findBrightestCluster()
 {
-    return 0; // Не используется
+    return 0;
 }

@@ -13,7 +13,7 @@ public:
         int blurSize;           // Размер ядра для размытия
 
         // Конструктор по умолчанию
-        Config() : minOverwrittenArea(500), blurSize(5) {}
+        Config() : minOverwrittenArea(8), blurSize(20) {}
     };
 
     // Конструктор с путем к изображению и конфигурацией
@@ -48,6 +48,23 @@ private:
 
     // Вспомогательный метод для поиска самого светлого кластера
     int findBrightestCluster();
+
+    struct ClusterFeatures
+    {
+        double linearity;
+        double density;
+
+        ClusterFeatures() : linearity(0), density(0) {}
+        ClusterFeatures(double l, double d) : linearity(l), density(d) {}
+    };
+
+    ClusterFeatures analyzeCluster(const cv::Mat &clusterMask);
+    void detectByHough(const cv::Mat &objectsMask);
+    void refineMasks();
+    void validateResults(const cv::Mat &objectsMask);
+
+    cv::Mat findStrokesByGeometry(const std::vector<cv::Mat> &clusters, int bgLabel);
+    cv::Mat findStrokesByHough(const cv::Mat &objectsMask);
 };
 
 #endif // IMAGEPROCESSOR_HPP
