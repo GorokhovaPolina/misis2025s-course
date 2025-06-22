@@ -1,3 +1,0 @@
--- Configuring done (0.9s)
--- Generating done (0.1s)
--- Build files have been written to: /Users/polinagorokhova/Desktop/mish_sem6/misis2025s-course/cmake-build-debug

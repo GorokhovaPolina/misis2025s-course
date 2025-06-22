@@ -7,47 +7,29 @@
 class ImageProcessor
 {
 public:
-    struct Config
-    {
-        int minOverwrittenArea; // Минимальная площадь зачеркивания
-        int blurSize;           // Размер ядра для размытия
-
-        // Конструктор по умолчанию
-        Config() : minOverwrittenArea(500), blurSize(5) {}
-    };
-
-    // Конструктор с путем к изображению и конфигурацией
-    ImageProcessor(const std::string &imagePath, const Config &config = Config());
-
-    // Основной метод обработки
+    ImageProcessor(const std::string &imagePath);
     void process();
-
-    // Сохранение бинарных масок
     void saveMasks(const std::string &mask1Path, const std::string &mask2Path);
 
-    // Оценка качества масок с помощью IoU
-    double calculateIoU(const cv::Mat &mask1, const cv::Mat &mask2);
+    // Геттеры для доступа к промежуточным результатам
+    const cv::Mat &getOriginalImage() const { return originalImage; }
+    const cv::Mat &getHSVImage() const { return hsvImage; }
+    const cv::Mat &getPreprocessedImage() const { return preprocessedImage; }
+    const cv::Mat &getBackgroundMask() const { return backgroundMask; }
+    const cv::Mat &getTextMask() const { return maskWritten; }
+    const cv::Mat &getStrikethroughMask() const { return maskOverwritten; }
 
 private:
-    cv::Mat originalImage;   // Исходное изображение
-    cv::Mat hsvImage;        // Изображение в HSV-пространстве
-    cv::Mat maskOverwritten; // Бинарная маска зачеркивания
-    cv::Mat maskWritten;     // Бинарная маска текста
-    cv::Mat backgroundMask;  // Маска фона
-    cv::Mat labels;          // Метки кластеризации (для K-Means)
-    Config config_;          // Конфигурационные параметры
-
-    // Предобработка изображения
     void preprocess();
+    void clusterColors(int k = 3);
+    cv::Mat expandMask(const cv::Mat &mask, const cv::Mat &hsv, const cv::Vec3f &refColor, float maxDist, int iterations);
 
-    // Создание масок текста и зачеркивания
-    void createMasks();
-
-    // Удаление фона
-    void removeBackground();
-
-    // Вспомогательный метод для поиска самого светлого кластера
-    int findBrightestCluster();
+    cv::Mat originalImage;
+    cv::Mat hsvImage;
+    cv::Mat preprocessedImage; // Добавляем поле для хранения предобработанного изображения
+    cv::Mat backgroundMask;
+    cv::Mat maskWritten;     // Text mask
+    cv::Mat maskOverwritten; // Strikethrough mask
 };
 
 #endif // IMAGEPROCESSOR_HPP
